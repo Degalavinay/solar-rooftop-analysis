@@ -2,29 +2,83 @@ import streamlit as st
 from PIL import Image
 import os
 from dotenv import load_dotenv
+import requests
+import base64
+from io import BytesIO
+import json
 
-# Load environment variables (for future API integration)
+# Load environment variables
 load_dotenv()
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")  # Will be used later
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-from dotenv import load_dotenv
-import os
-
-load_dotenv()
-api_key = os.getenv("OPENROUTER_API_KEY")
-if api_key:
-    print("API key loaded successfully")
-else:
-    print("API key not found")
-
-# Placeholder for AI image analysis
-def analyze_image(image=None):
+# Placeholder for AI image analysis (fallback)
+def analyze_image_placeholder():
     return {
-        "area_m2": 100,  # Rooftop area in square meters
-        "orientation_deg": 180,  # South-facing
-        "shading_percent": 10,  # 10% shaded
+        "area_m2": 100,
+        "orientation_deg": 180,
+        "shading_percent": 10,
         "obstructions": ["chimney"]
     }
+
+# OpenRouter API image analysis
+def analyze_image(image=None):
+    if image is None:
+        return analyze_image_placeholder()
+    
+    try:
+        # Convert PIL image to base64
+        buffered = BytesIO()
+        image.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+
+        # Call OpenRouter API
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "anthropic/claude-3-opus",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Analyze this rooftop image for solar potential. Return area (m²), orientation (degrees), shading (%), and obstructions in JSON format."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img_str}"}
+                        }
+                    ]
+                }
+            ]
+        }
+        response = requests.post(url, headers=headers, json=payload)
+        
+        if response.status_code == 200:
+            result = response.json()
+            content = result["choices"][0]["message"]["content"]
+            # Parse JSON response
+            try:
+                parsed_result = json.loads(content)
+                # Validate required fields
+                required = ["area_m2", "orientation_deg", "shading_percent", "obstructions"]
+                if all(key in parsed_result for key in required):
+                    return parsed_result
+                else:
+                    st.warning("API response missing required fields. Using placeholder data.")
+                    return analyze_image_placeholder()
+            except json.JSONDecodeError:
+                st.warning("Invalid JSON from API. Using placeholder data.")
+                return analyze_image_placeholder()
+        else:
+            st.error(f"API error: {response.text}")
+            return analyze_image_placeholder()
+    except Exception as e:
+        st.error(f"Error processing image: {str(e)}")
+        return analyze_image_placeholder()
 
 # Calculate solar potential (kWh/year)
 def calculate_solar_potential(area, orientation, shading, insolation=5):
@@ -45,7 +99,7 @@ def calculate_roi(kwh, cost_per_watt=3, incentive=0.3, electricity_rate=0.12):
 st.title("Solar Rooftop Analysis Tool")
 
 # Image upload
-uploaded_file = st.file_uploader("Upload satellite image of rooftop", type=["png", "jpg"])
+uploaded_file = st.file_uploader("Upload satellite image of rooftop", type=["png", "jpg", "jpeg"])
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file)
